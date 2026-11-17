@@ -56,6 +56,24 @@ export function ensureSchema(): Promise<void> {
         primary key (account_key, chat_id, msg_id)
       )`;
       await sql`create index if not exists messages_deleted_idx on messages (account_key, chat_id, msg_id) where deleted_at is not null`;
+      await sql`create table if not exists chat_sync (
+        account_key text not null, chat_id text not null,
+        full_at    timestamptz,          -- history backfill finished (or hit the auto-save cap)
+        cursor     bigint,               -- resume point of an unfinished backfill (oldest id saved so far)
+        last_id    bigint,               -- newest message id seen at the last sync
+        checked_at timestamptz,
+        primary key (account_key, chat_id)
+      )`;
+      await sql`create table if not exists pins (
+        account_key text not null, chat_id text not null, msg_id bigint not null,
+        pinned_at timestamptz not null default now(),
+        primary key (account_key, chat_id, msg_id)
+      )`;
+      await sql`create table if not exists chat_pins (
+        account_key text not null, chat_id text not null,
+        pinned_at timestamptz not null default now(),
+        primary key (account_key, chat_id)
+      )`;
       await sql`create table if not exists thumbs (
         account_key text not null, chat_id text not null, msg_id bigint not null, data bytea not null,
         primary key (account_key, chat_id, msg_id)

@@ -21,10 +21,11 @@ Next.js (App Router) + GramJS. Multi-account: each account has its own `api_id`/
 - Only small previews of photos/videos are fetched; originals are never downloaded.
 
 ## Message archive (deleted-message safety net)
-- Every message the app sees is copied to Postgres. If Telegram later stops returning a message that was archived, it is marked **deleted** (kept, with its text) and shown with a red dashed border when you turn on **Deleted** in the chat header. Edited messages keep their earlier versions.
-- Telegram never gives deleted messages back, so only messages saved *before* deletion can be shown. Use the archive button in a chat header to save its full history now, and let the daily cron (`vercel.json`, 03:00 UTC; hourly is allowed on Pro) sweep your 40 most recent chats.
-- Deletions are only noticed when the app re-reads the same chat range (opening the chat, the cron, or a history save). Photo/video previews are cached too; original files are not stored.
-- The archive is keyed by the Telegram user id, so removing and re-adding an account reconnects to the same archive. Messages are stored as plain text in your database (the provider encrypts the disk), so use a private database.
+- **Automatic:** after you sign in, the app copies every chat into Postgres in the background (newest 3,000 messages per chat), with a progress bar and a Pause button at the bottom of the chat list. Each sign-in only tops up chats that changed. Unfinished chats resume where they stopped, and the daily cron (`vercel.json`, 03:00 UTC) keeps backfilling and refreshing your 40 most recent chats even when nobody is signed in.
+- **Deleted messages stay in the chat** as a dashed "Deleted message" line. Click **Show** to read it (and **Hide** to collapse it again). Edited messages keep their earlier versions under "Edited".
+- The floppy-disk button in a chat header saves that chat's **entire** history (no 3,000 limit), after a confirmation.
+- Telegram never gives deleted messages back, so only messages saved *before* they were deleted can be shown. A deletion is noticed when the app re-reads that part of the chat (opening it, the next sign-in's refresh, or the daily job).
+- Photo/video previews are cached too; original files are not stored. The archive is keyed by the Telegram user id, so removing and re-adding an account reconnects to the same archive. Messages are stored as plain text in your database (the provider encrypts the disk), so use a private database.
 
 ## Sharing with family (multi-user)
 - Everyone gets their own username and password. Open the account menu (top of the chat list) → **People** (admin only) → add a person, then send them the link, username and password.
@@ -44,3 +45,13 @@ One-time setup:
    - Variables: `NEON_PROJECT_ID` (Neon → project → Settings → General), `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID` (run `npx vercel link` here, then read `.vercel/project.json`).
 3. **Vercel env vars, "Preview" scope:** `APP_SECRET`, `APP_PASSWORD`, `CRON_SECRET`. Leave `DATABASE_URL` unset for Preview: the workflow injects the branch's URL. Use a different `APP_SECRET` than production.
 4. If previews ask for a Vercel login, turn off Deployment Protection for previews (Project → Settings → Deployment Protection), or keep it on and accept the extra login.
+
+## Settings, language, archived chats
+- The sliders button in the left bar opens **Settings**: language (English / Bahasa Indonesia), change password, and (admins only) **People**. The language is also switchable on the sign-in page.
+- Telegram's own **Archived chats** folder shows up as the **Archived** filter above the chat list (like the Telegram app, archived chats are not mixed into All).
+- Actions report back with short toasts (click one to dismiss it).
+
+## Pinned messages
+- Hover a message and press the pin to keep it. The pushpin in a chat header lists that chat's pins; the pushpin in the left bar lists every pinned message of the current Telegram account (with "Open chat").
+- **Pin a conversation** with the to-top button in a chat header: pinned conversations stay at the top of the chat list (marked with a pushpin). Clicking a pinned message in the list jumps to it in the chat (a **Back to the latest messages** button brings you back).
+- Pins live only in this app's Postgres (`pins` table). They never pin, read or change anything on Telegram. A pinned message keeps its text even if it is deleted on Telegram later (it is flagged "Deleted on Telegram, kept here").

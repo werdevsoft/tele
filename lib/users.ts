@@ -79,6 +79,8 @@ export async function deleteUser(id: string) {
   if (keys.length) {
     await s`delete from messages where account_key = any(${keys}::text[])`;
     await s`delete from thumbs where account_key = any(${keys}::text[])`;
+    await s`delete from pins where account_key = any(${keys}::text[])`;
+    await s`delete from chat_pins where account_key = any(${keys}::text[])`;
   }
   await s`delete from accounts where owner_id = ${id}`;
   await s`delete from users where id = ${id}`;
