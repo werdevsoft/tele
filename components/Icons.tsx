@@ -1,0 +1,14 @@
+const p = { fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round", viewBox: "0 0 24 24" } as const;
+export const Search = () => <svg {...p}><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4 4" /></svg>;
+export const Gear = () => <svg {...p}><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1" /></svg>;
+export const Plus = () => <svg width="18" height="18" {...p} strokeWidth={2}><path d="M12 5v14M5 12h14" /></svg>;
+export const Back = () => <svg {...p}><path d="m15 5-7 7 7 7" /></svg>;
+export const File = () => <svg {...p}><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5" /></svg>;
+export const Play = () => <svg {...p}><rect x="3" y="5" width="18" height="14" rx="3" /><path d="m10 9.5 5 2.5-5 2.5z" /></svg>;
+export const Mic = () => <svg {...p}><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3" /></svg>;
+export const Pin = () => <svg {...p}><path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11z" /><circle cx="12" cy="10" r="2.5" /></svg>;
+export const Chat = () => <svg {...p} strokeWidth={1.5}><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z" /></svg>;
+export const Lock = () => <svg {...p}><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>;
+export const Chevron = () => <svg width="14" height="14" {...p} strokeWidth={2}><path d="m6 9 6 6 6-6" /></svg>;
+export const Check = () => <svg width="16" height="16" {...p} strokeWidth={2}><path d="m5 12 5 5 9-10" /></svg>;
+export const Archive = () => <svg {...p}><rect x="3" y="4" width="18" height="5" rx="1.5" /><path d="M5 9v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9M10 13h4" /></svg>;
