@@ -1,10 +1,9 @@
-import { promises as fs } from "fs";
-import path from "path";
-import { db, archiveEnabled, ensureSchema } from "./db";
+import { archiveEnabled, db, ensureSchema } from "./db";
 import { decrypt, encrypt } from "./crypto";
 
 export type Account = {
   id: string;
+  ownerId?: string;       // the app user this Telegram account belongs to (stored in its own column)
   label: string;
   apiId: number;
   apiHash: string;
@@ -13,51 +12,49 @@ export type Account = {
   me?: { id?: string; name: string; username?: string; phone?: string };
 };
 
-/*
- * Accounts live in Postgres (table `accounts`, one encrypted row each).
- * Without DATABASE_URL (local dev only) they fall back to an encrypted file, .data/store.json.
- */
-const FILE = path.join(process.cwd(), ".data", "store.json");
-
-async function fileRead(): Promise<Account[]> {
-  try { return JSON.parse(decrypt(await fs.readFile(FILE, "utf8"))); } catch (e: any) {
-    if (e?.code === "ENOENT") return [];
-    throw new Error("Could not decrypt stored accounts. Did APP_SECRET change?");
-  }
+/* Telegram accounts live in Postgres (table `accounts`): one row each, payload AES-256-GCM encrypted. */
+function conn() {
+  if (!archiveEnabled) throw new Error("DATABASE_URL is not set. Add a Postgres database (see README).");
+  return ensureSchema().then(() => db());
 }
-async function fileWrite(items: Account[]) {
-  if (process.env.VERCEL) throw new Error("No database configured: set DATABASE_URL.");
-  await fs.mkdir(path.dirname(FILE), { recursive: true });
-  await fs.writeFile(FILE, encrypt(JSON.stringify(items)), { mode: 0o600 });
-}
-
-export async function loadAccounts(): Promise<Account[]> {
-  if (!archiveEnabled) return fileRead();
-  await ensureSchema();
-  const rows = await db()`select data from accounts order by created_at, id`;
-  try { return rows.map((r: any) => JSON.parse(decrypt(r.data))); }
+function parse(r: any): Account {
+  try { return { ...JSON.parse(decrypt(r.data)), ownerId: r.owner_id ?? undefined }; }
   catch { throw new Error("Could not decrypt stored accounts. Did APP_SECRET change?"); }
 }
 
-export async function putAccount(a: Account) {
-  if (!archiveEnabled) {
-    const items = await fileRead(), i = items.findIndex((x) => x.id === a.id);
-    if (i >= 0) items[i] = a; else items.push(a);
-    return fileWrite(items);
-  }
-  await ensureSchema();
-  await db()`insert into accounts (id, data) values (${a.id}, ${encrypt(JSON.stringify(a))})
-             on conflict (id) do update set data = excluded.data`;
-}
-
-export async function deleteAccount(id: string) {
-  if (!archiveEnabled) return fileWrite((await fileRead()).filter((x) => x.id !== id));
-  await ensureSchema();
-  await db()`delete from accounts where id = ${id}`;
+/** Accounts of one user, or every account when ownerId is omitted (system jobs only). */
+export async function loadAccounts(ownerId?: string): Promise<Account[]> {
+  const sql = await conn();
+  const rows = ownerId
+    ? await sql`select data, owner_id from accounts where owner_id = ${ownerId} order by created_at, id`
+    : await sql`select data, owner_id from accounts order by created_at, id`;
+  // one unreadable row (e.g. written under another APP_SECRET) must not hide everyone else's accounts
+  return rows.flatMap((r) => { try { return [parse(r)]; } catch (e) { console.error("skipping unreadable account row", (r as any).owner_id); return []; } });
 }
 
 export async function getAccount(id: string): Promise<Account | undefined> {
-  return (await loadAccounts()).find((a) => a.id === id);
+  const sql = await conn();
+  const [r] = await sql`select data, owner_id from accounts where id = ${id}`;
+  return r ? parse(r) : undefined;
+}
+
+export async function accountOwner(id: string): Promise<string | null | undefined> {
+  const sql = await conn();
+  const [r] = await sql`select owner_id from accounts where id = ${id}`;
+  return r ? r.owner_id : undefined;
+}
+
+export async function putAccount(a: Account) {
+  if (!a.ownerId) throw new Error("Account has no owner");
+  const { ownerId, ...rest } = a;
+  const sql = await conn();
+  await sql`insert into accounts (id, data, owner_id) values (${a.id}, ${encrypt(JSON.stringify(rest))}, ${ownerId})
+            on conflict (id) do update set data = excluded.data`;
+}
+
+export async function deleteAccount(id: string) {
+  const sql = await conn();
+  await sql`delete from accounts where id = ${id}`;
 }
 
 export async function updateAccount(id: string, fn: (a: Account) => void): Promise<Account | undefined> {

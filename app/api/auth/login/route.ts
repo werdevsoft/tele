@@ -1,15 +1,26 @@
 import { NextResponse } from "next/server";
-import { COOKIE, route, HttpError } from "@/lib/api";
-import { makeToken, passwordOk } from "@/lib/crypto";
+import { route, HttpError, withSession } from "@/lib/api";
+import { hashPassword, verifyPassword } from "@/lib/crypto";
+import { clearFailures, findByUsername, normUsername, publicUser, recordFailure } from "@/lib/users";
+
+let dummy: Promise<string> | null = null;   // so unknown usernames cost the same time as wrong passwords
 
 export const POST = route(async (req) => {
-  const { password } = await req.json();
-  if (!process.env.APP_PASSWORD) throw new HttpError(500, "APP_PASSWORD is not set on the server");
-  if (!passwordOk(String(password ?? ""))) {
-    await new Promise((r) => setTimeout(r, 800));     // slow down guessing
-    throw new HttpError(401, "Wrong password");
+  const b = await req.json();
+  const u = await findByUsername(normUsername(b.username));
+  const pw = String(b.password ?? "");
+  if (!u) {
+    await verifyPassword(pw, await (dummy ??= hashPassword("dummy-password")));
+    throw new HttpError(401, "Wrong username or password");
   }
-  const res = NextResponse.json({ ok: true });
-  res.cookies.set(COOKIE, makeToken(30), { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", path: "/", maxAge: 30 * 86400 });
-  return res;
+  if (u.locked_until && new Date(u.locked_until) > new Date()) {
+    const mins = Math.ceil((new Date(u.locked_until).getTime() - Date.now()) / 60000);
+    throw new HttpError(429, `Too many wrong passwords. Try again in ${mins} min.`);
+  }
+  if (!(await verifyPassword(pw, u.pw_hash))) {
+    await recordFailure(u.id);
+    throw new HttpError(401, "Wrong username or password");
+  }
+  await clearFailures(u.id);
+  return withSession(NextResponse.json({ user: publicUser(u) }), u);
 }, { public: true });

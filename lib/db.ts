@@ -20,11 +20,22 @@ export function ensureSchema(): Promise<void> {
   if (!ready) {
     const sql = db();
     ready = (async () => {
+      await sql`create table if not exists users (
+        id text primary key,
+        username text not null unique,
+        pw_hash text not null,
+        is_admin boolean not null default false,
+        fail_count int not null default 0,
+        locked_until timestamptz,
+        created_at timestamptz not null default now()
+      )`;
       await sql`create table if not exists accounts (
         id text primary key,
         data text not null,                  -- AES-256-GCM encrypted JSON (api_hash, session...)
         created_at timestamptz not null default now()
       )`;
+      await sql`alter table accounts add column if not exists owner_id text`;
+      await sql`create index if not exists accounts_owner_idx on accounts (owner_id)`;
       await sql`create table if not exists messages (
         account_key text not null,           -- Telegram user id of the account
         chat_id     text not null,

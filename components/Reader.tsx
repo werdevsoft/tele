@@ -3,6 +3,10 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import * as Ic from "./Icons";
 import AccountDialog from "./AccountDialog";
 import LoginCard from "./LoginCard";
+import UsersDialog from "./UsersDialog";
+import PasswordDialog from "./PasswordDialog";
+import ConfirmDialog from "./ConfirmDialog";
+import type { Me } from "./Gate";
 import { Account, Dialog, Msg, api, ApiError, avatarBg, dayLabel, fmtDur, fmtSize, fmtTime, hue, initials, peerQS } from "@/lib/client";
 
 const FILTERS = [["all", "All"], ["unread", "Unread"], ["user", "People"], ["group", "Groups"], ["channel", "Channels"]] as const;
@@ -40,7 +44,7 @@ function MediaView({ m, src }: { m: Msg; src: string }) {
   return <Att icon={<Ic.File />}>{k.kind[0].toUpperCase() + k.kind.slice(1)}</Att>;
 }
 
-export default function Reader({ onLock }: { onLock: () => void }) {
+export default function Reader({ user, onLock }: { user: Me; onLock: () => void }) {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [accId, setAccId] = useState<string | null>(null);
   const [booted, setBooted] = useState(false);
@@ -52,6 +56,7 @@ export default function Reader({ onLock }: { onLock: () => void }) {
   const [dlg, setDlg] = useState<{ acc: Account | null } | null>(null);
   const [listErr, setListErr] = useState("");
   const [menu, setMenu] = useState(false);
+  const [panel, setPanel] = useState<null | "users" | "password">(null);
   const menuRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!menu) return;
@@ -120,7 +125,7 @@ export default function Reader({ onLock }: { onLock: () => void }) {
         ))}
         <div className="sp" />
         <button className="rail-add" title="Add account" aria-label="Add account" onClick={() => setDlg({ acc: null })}><Ic.Plus /></button>
-        <button className="rail-out" title="Lock" aria-label="Lock" onClick={lock}><Ic.Lock /></button>
+        <button className="rail-out" title="Sign out" aria-label="Sign out" onClick={lock}><Ic.Lock /></button>
       </nav>
 
       <aside className="list-pane">
@@ -144,6 +149,11 @@ export default function Reader({ onLock }: { onLock: () => void }) {
                   <button role="menuitem" className="sw-item" onClick={() => { setMenu(false); setDlg({ acc: null }); }}>
                     <span className="sw-av plus"><Ic.Plus /></span><span className="sw-txt"><b>Add account</b></span>
                   </button>
+                  <div className="sw-sep" />
+                  <div className="sw-me">Signed in as {user.username}{user.is_admin ? " (admin)" : ""}</div>
+                  {user.is_admin && <button role="menuitem" className="sw-item" onClick={() => { setMenu(false); setPanel("users"); }}><span className="sw-txt"><b>People</b></span></button>}
+                  <button role="menuitem" className="sw-item" onClick={() => { setMenu(false); setPanel("password"); }}><span className="sw-txt"><b>Change password</b></span></button>
+                  <button role="menuitem" className="sw-item" onClick={() => { setMenu(false); lock(); }}><span className="sw-txt"><b>Sign out</b></span></button>
                 </div>
               )}
             </div>
@@ -185,6 +195,8 @@ export default function Reader({ onLock }: { onLock: () => void }) {
           : <div className="center"><div className="idle"><div style={{ width: 44, margin: "0 auto 10px", opacity: .6 }}><Ic.Chat /></div>Pick a chat to start reading</div></div>}
       </main>
 
+      {panel === "users" && <UsersDialog meId={user.id} onClose={() => setPanel(null)} />}
+      {panel === "password" && <PasswordDialog onClose={() => setPanel(null)} onDone={() => setPanel(null)} />}
       {dlg && <AccountDialog acc={dlg.acc} onClose={() => setDlg(null)}
         onSaved={async (id) => { setDlg(null); await loadAccounts(); setAccId(id); }}
         onSignedOut={async () => { setDlg(null); await loadAccounts(); setChat(null); }}
@@ -201,6 +213,7 @@ function ChatView({ acc, chat, onBack, onActivity }: { acc: Account; chat: Dialo
   const [showDel, setShowDel] = useState(false);
   const [meta, setMeta] = useState({ deleted: 0, archive: false });
   const [sync, setSync] = useState<string | null>(null);
+  const [askSave, setAskSave] = useState(false);
   useEffect(() => { try { setShowDel(localStorage.getItem("showDeleted") === "1"); } catch {} }, []);
   const scRef = useRef<HTMLDivElement>(null);
   const stick = useRef<"bottom" | { h: number } | null>("bottom");
@@ -278,9 +291,10 @@ function ChatView({ acc, chat, onBack, onActivity }: { acc: Account; chat: Dialo
       <Avatar accId={acc.id} d={chat} small />
       <div className="t"><b>{chat.name}</b><small>{{ user: "Private chat", bot: "Bot", group: "Group", channel: "Channel" }[chat.type]}</small></div>
       {meta.archive && <>
-        <button className={"pill" + (showDel ? " on" : "")} onClick={toggleDel} aria-pressed={showDel} title="Show messages that were deleted or edited on Telegram">
-          Deleted{meta.deleted > 0 && <b>{meta.deleted}</b>}</button>
-        <button className="icon-btn" aria-label="Save full history" title="Save this chat's full history to the archive" onClick={saveAll} disabled={sync?.startsWith("Saving")}><Ic.Archive /></button>
+        <button className={"pill" + (showDel ? " on" : "")} onClick={toggleDel} aria-pressed={showDel}
+          title={showDel ? "Hide messages deleted on Telegram" : "Show messages that were deleted or edited on Telegram (only ones saved to your archive before they were deleted)"}>
+          {showDel ? "Showing deleted" : "Show deleted"}{meta.deleted > 0 && <b>{meta.deleted}</b>}</button>
+        <button className="icon-btn" aria-label="Save full chat history to archive" title="Save this chat's full history to your archive" onClick={() => setAskSave(true)} disabled={sync?.startsWith("Saving")}><Ic.Archive /></button>
       </>}
       <div className={"in-search" + (open ? " open" : "")}>
         <input type="search" placeholder="Search in chat" value={sq} onChange={(e) => setSq(e.target.value.trim() ? e.target.value : "")} autoFocus={open} />
@@ -323,6 +337,16 @@ function ChatView({ acc, chat, onBack, onActivity }: { acc: Account; chat: Dialo
           </>}
       </div>
     </div>
+    {askSave && (
+      <ConfirmDialog title="Save this chat to your archive?" confirmLabel="Save history" onClose={() => setAskSave(false)} onConfirm={saveAll}>
+        <p>This reads <b>every message</b> in “{chat.name}” from Telegram and copies it into your private archive database.</p>
+        <ul>
+          <li>If someone deletes a message later, you can still read it here with <b>Show deleted</b>.</li>
+          <li>Big chats can take a few minutes. Keep this tab open until it says “Saved”.</li>
+          <li>It does <b>not</b> mark anything as read and changes nothing on Telegram.</li>
+          <li>Safe to run again: it only adds new messages and flags ones that disappeared.</li>
+        </ul>
+      </ConfirmDialog>)}
     <div className="readonly-bar">{sync ? sync : "Read-only · opening a chat here won’t mark messages as read in Telegram"}</div>
   </>);
 }

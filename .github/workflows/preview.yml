@@ -1,0 +1,135 @@
+# A preview deployment per pull request with its OWN database branch.
+#
+# What a pull request gets:
+#   - a Neon branch `preview/pr-<number>` created from a long-lived parent branch (default `development`).
+#     Neon branches are copy-on-write: the preview has the parent's tables and data, and anything it writes stays in
+#     its own branch. It never touches the parent or the production branch.
+#   - a Vercel preview deployment whose runtime DATABASE_URL points at that branch. Every other setting
+#     (APP_SECRET, APP_PASSWORD, CRON_SECRET) comes from the Vercel "Preview" environment variables.
+#     The tables are created by the app on first use, so there is no migration step.
+#   - one comment on the pull request, edited on every push: a stable address `tg-reader-pr-<number>.vercel.app`
+#     that always points at the newest push, this push's own address, and the commit it was built from.
+# When the pull request is closed the Neon branch and the stable address are removed.
+#
+# Pick the parent so it holds NO real Telegram sessions: a preview that branches from production could use
+# (and decrypt, if it shares APP_SECRET) your real accounts. Setup steps and secrets: README.md > PR previews.
+#
+# Vercel's own Git builds are switched off for everything but `main` (`ignoreCommand` in vercel.json), so a
+# preview never starts without its branch.
+name: Preview
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    branches: [main]
+
+concurrency:
+  group: preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  NEON_BRANCH: preview/pr-${{ github.event.pull_request.number }}
+  ALIAS: tg-reader-pr-${{ github.event.pull_request.number }}.vercel.app
+
+jobs:
+  deploy:
+    # Secrets are not available to pull requests from forks.
+    if: github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Neon branch from the parent branch
+        id: branch
+        uses: neondatabase/create-branch-action@v6
+        with:
+          project_id: ${{ vars.NEON_PROJECT_ID }}
+          api_key: ${{ secrets.NEON_API_KEY }}
+          branch_name: ${{ env.NEON_BRANCH }}
+          parent_branch: ${{ vars.NEON_PREVIEW_PARENT_BRANCH || 'development' }}
+      - name: Build and deploy the preview
+        id: vercel
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          DB_URL_POOLED: ${{ steps.branch.outputs.db_url_pooled }}
+        run: |
+          npx --yes vercel@latest pull --yes --environment=preview --token "$VERCEL_TOKEN"
+          npx --yes vercel@latest build --token "$VERCEL_TOKEN"
+          # The branch's own database goes in at runtime; everything else is the Preview environment.
+          URL=$(npx --yes vercel@latest deploy --prebuilt --token "$VERCEL_TOKEN" --env DATABASE_URL="$DB_URL_POOLED")
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+      - name: Stable address for this pull request
+        id: alias
+        # Best effort: if the alias cannot be set, the comment still carries this push's own address.
+        continue-on-error: true
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          PREVIEW_URL: ${{ steps.vercel.outputs.url }}
+        # The REST API instead of `vercel alias`: that CLI command loads a personal user, which a team token does not have.
+        run: |
+          API=https://api.vercel.com
+          ID=$(curl -fsS -H "Authorization: Bearer $VERCEL_TOKEN" "$API/v13/deployments/${PREVIEW_URL#https://}?teamId=$VERCEL_ORG_ID" | jq -r .id)
+          test -n "$ID" && test "$ID" != null
+          curl -fsS -X POST -H "Authorization: Bearer $VERCEL_TOKEN" -H "Content-Type: application/json" \
+            "$API/v2/deployments/$ID/aliases?teamId=$VERCEL_ORG_ID" -d "{\"alias\":\"$ALIAS\"}"
+          echo "url=https://$ALIAS" >> "$GITHUB_OUTPUT"
+      - name: Comment the addresses on the pull request
+        uses: actions/github-script@v7
+        env:
+          PREVIEW_URL: ${{ steps.vercel.outputs.url }}
+          ALIAS_URL: ${{ steps.alias.outputs.url }}
+          PARENT: ${{ vars.NEON_PREVIEW_PARENT_BRANCH || 'development' }}
+        with:
+          script: |
+            const marker = '<!-- tg-reader-preview -->';
+            // The branch's real latest commit (context.sha on a pull_request event is GitHub's temporary merge commit).
+            const head = context.payload.pull_request.head.sha;
+            const { data: commit } = await github.rest.repos.getCommit({ ...context.repo, ref: head });
+            const subject = commit.commit.message.split('\n')[0];
+            const when = new Date().toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+            const body = [
+              marker,
+              `**Preview** (own database branch \`${process.env.NEON_BRANCH}\`, created from \`${process.env.PARENT}\`)`,
+              '',
+              process.env.ALIAS_URL ? `**Always the newest push:** ${process.env.ALIAS_URL}` : '',
+              `This push's own address (stays at this version): ${process.env.PREVIEW_URL}`,
+              '',
+              `Built from [\`${head.slice(0, 7)}\`](${commit.html_url}): ${subject}`,
+              `Updated ${when}. Refresh the page to see the latest edit of this comment. The database branch is deleted when this pull request is closed.`,
+            ].filter((l, i, a) => l !== '' || a[i - 1] !== '').join('\n');
+            const { data: comments } = await github.rest.issues.listComments({ ...context.repo, issue_number: context.issue.number });
+            const mine = comments.find((c) => c.body && c.body.startsWith(marker));
+            if (mine) await github.rest.issues.updateComment({ ...context.repo, comment_id: mine.id, body });
+            else await github.rest.issues.createComment({ ...context.repo, issue_number: context.issue.number, body });
+
+  cleanup:
+    if: github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Remove the stable preview address
+        continue-on-error: true
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+        run: |
+          API=https://api.vercel.com
+          AID=$(curl -fsS -H "Authorization: Bearer $VERCEL_TOKEN" "$API/v4/aliases/$ALIAS?teamId=$VERCEL_ORG_ID" | jq -r '.uid // .id')
+          test -n "$AID" && test "$AID" != null
+          curl -fsS -X DELETE -H "Authorization: Bearer $VERCEL_TOKEN" "$API/v2/aliases/$AID?teamId=$VERCEL_ORG_ID"
+      - name: Delete the preview database branch
+        uses: neondatabase/delete-branch-action@v3
+        with:
+          project_id: ${{ vars.NEON_PROJECT_ID }}
+          api_key: ${{ secrets.NEON_API_KEY }}
+          branch: ${{ env.NEON_BRANCH }}
