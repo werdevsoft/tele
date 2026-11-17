@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, scrypt, timingSafeEqual } from "crypto";
 
 function secret(): string {
   const s = process.env.APP_SECRET;
@@ -21,20 +21,38 @@ export function decrypt(b64: string): string {
 }
 
 const sign = (v: string) => createHmac("sha256", "cookie:" + secret()).update(v).digest("hex");
-export function makeToken(days = 30): string {
-  const exp = String(Date.now() + days * 864e5);
-  return `${exp}.${sign(exp)}`;
+
+/** Login cookie: userId.expiry.pwTag.signature. pwTag changes when the password does, so old cookies die. */
+export const pwTag = (pwHash: string) => createHash("sha256").update(pwHash).digest("hex").slice(0, 12);
+export function makeToken(uid: string, tag: string, days = 30): string {
+  const payload = `${uid}.${Date.now() + days * 864e5}.${tag}`;
+  return `${payload}.${sign(payload)}`;
 }
-export function checkToken(t?: string): boolean {
-  if (!t) return false;
-  const [exp, sig] = t.split(".");
-  if (!exp || !sig || Number(exp) < Date.now()) return false;
-  const a = Buffer.from(sig), b = Buffer.from(sign(exp));
-  return a.length === b.length && timingSafeEqual(a, b);
+export function parseToken(t?: string): { uid: string; tag: string } | null {
+  if (!t) return null;
+  const parts = t.split(".");
+  if (parts.length !== 4) return null;
+  const [uid, exp, tag, sig] = parts;
+  if (Number(exp) < Date.now()) return null;
+  const a = Buffer.from(sig), b = Buffer.from(sign(`${uid}.${exp}.${tag}`));
+  return a.length === b.length && timingSafeEqual(a, b) ? { uid, tag } : null;
 }
-export function passwordOk(input: string): boolean {
-  const p = process.env.APP_PASSWORD;
-  if (!p) return false;
-  const a = createHash("sha256").update(input).digest(), b = createHash("sha256").update(p).digest();
+
+export function secretEquals(input: string, expected: string | undefined): boolean {
+  if (!expected) return false;
+  const a = createHash("sha256").update(input).digest(), b = createHash("sha256").update(expected).digest();
   return timingSafeEqual(a, b);
+}
+
+const scryptAsync = (pw: string, salt: Buffer) =>
+  new Promise<Buffer>((res, rej) => scrypt(pw, salt, 64, { N: 16384, r: 8, p: 1 }, (e, k) => (e ? rej(e) : res(k))));
+export async function hashPassword(pw: string): Promise<string> {
+  const salt = randomBytes(16);
+  return `s1$${salt.toString("hex")}$${(await scryptAsync(pw, salt)).toString("hex")}`;
+}
+export async function verifyPassword(pw: string, stored: string): Promise<boolean> {
+  const [v, salt, hash] = stored.split("$");
+  if (v !== "s1" || !salt || !hash) return false;
+  const k = await scryptAsync(pw, Buffer.from(salt, "hex")), h = Buffer.from(hash, "hex");
+  return k.length === h.length && timingSafeEqual(k, h);
 }

@@ -1,12 +1,16 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Reader from "@/components/Reader";
-import Gate from "@/components/Gate";
+import Gate, { Me } from "@/components/Gate";
 
 export default function Page() {
-  const [authed, setAuthed] = useState<boolean | null>(null);
-  useEffect(() => { fetch("/api/auth/me").then((r) => setAuthed(r.ok)).catch(() => setAuthed(false)); }, []);
-  if (authed === null) return <div className="gate"><div className="spin" /></div>;
-  if (!authed) return <Gate onDone={() => setAuthed(true)} />;
-  return <Reader onLock={() => setAuthed(false)} />;
+  const [st, setSt] = useState<{ user: Me | null; setup: boolean } | null>(null);
+  const load = useCallback(() => {
+    fetch("/api/auth/me").then((r) => r.json()).then((d) => setSt(d.user !== undefined ? d : { user: null, setup: false }))
+      .catch(() => setSt({ user: null, setup: false }));
+  }, []);
+  useEffect(load, [load]);
+  if (!st) return <div className="gate"><div className="spin" /></div>;
+  if (!st.user) return <Gate setup={st.setup} onDone={(user) => setSt({ user, setup: false })} />;
+  return <Reader user={st.user} onLock={() => setSt({ user: null, setup: false })} />;
 }
