@@ -47,6 +47,17 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Check that the parent Neon branch exists
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          PROJECT_ID: ${{ vars.NEON_PROJECT_ID }}
+          PARENT: ${{ vars.NEON_PREVIEW_PARENT_BRANCH || 'development' }}
+        run: |
+          NAMES=$(curl -fsS -H "Authorization: Bearer $NEON_API_KEY" "https://console.neon.tech/api/v2/projects/$PROJECT_ID/branches" | jq -r '.branches[].name')
+          if ! echo "$NAMES" | grep -qxF "$PARENT"; then
+            echo "::error::The Neon branch '$PARENT' does not exist in this project. Create it in the Neon console (Branches > New branch, from main) before it holds real data, or set the GitHub variable NEON_PREVIEW_PARENT_BRANCH to another branch. Existing branches: $(echo $NAMES | tr '\n' ' ')"
+            exit 1
+          fi
       - name: Neon branch from the parent branch
         id: branch
         uses: neondatabase/create-branch-action@v6
